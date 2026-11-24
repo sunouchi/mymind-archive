@@ -1,0 +1,11 @@
+{
+  "data_dir": "~/mymind-archive",
+  "mirror_dir": "~/Library/CloudStorage/Dropbox/mymind-archive",
+  "include_embeddings": true,
+  "download_screenshots": true,
+  "download_blobs": true,
+  "try_direct_media_url": true,
+  "sustained_reserve_ratio": 0.3,
+  "max_blob_mb": 200,
+  "mass_delete_guard": 0.3
+}

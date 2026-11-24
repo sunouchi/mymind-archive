@@ -1,0 +1,12 @@
+# データ・設定・鍵はこのリポジトリの外に置く。ここは念のための保険
+/data/
+/mymind-archive/
+config.json
+credentials.json
+.env
+*.log
+*.part
+*.tmp
+__pycache__/
+*.pyc
+.DS_Store
