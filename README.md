@@ -1,5 +1,182 @@
 # mymind-archive
 
+**English** | [日本語](#日本語)
+
+Keep a local copy of everything you save in [mymind](https://mymind.com), updated daily through the official API.
+Items you later delete in mymind stay in your archive.
+
+This is an unofficial tool. It is not affiliated with mymind.
+
+## What it does
+
+- Once a day, fetches the full list of your objects and compares it with the local copy
+- Saves new items, and overwrites updated items with their latest state
+- Never deletes anything locally. When an item disappears from mymind, it is kept and marked with a deletion date
+  (within 30 days of deletion, the script also fetches the item's final state)
+- Clears the deletion mark when you restore an item from the trash
+- Downloads original files (images, PDFs and so on) and screenshots
+- Optionally mirrors the archive one-way into another folder, such as Dropbox
+
+Requires Python 3.9 or later and uses only the standard library. Written for macOS.
+
+Command output and code comments are currently in Japanese.
+
+## Where things live
+
+The code and your data are kept apart. Your data, settings and API key never go into this repository.
+
+| What | Where |
+|---|---|
+| Code | This repository (clone it anywhere) |
+| Settings | `~/.config/mymind-archive/config.json` |
+| API key | macOS Keychain |
+| Data | `~/mymind-archive` (change with `data_dir`) |
+| Mirror | `mirror_dir` in the settings (optional) |
+| Log | `~/Library/Logs/mymind-archive/backup.log` |
+
+If `data_dir` or `mirror_dir` points inside this repository, the script stops, so that you cannot commit your data by accident.
+
+## Setup
+
+### 1. Create an API key
+
+Create an access key at <https://access.mymind.com/extensions>. **Read only** access is enough.
+You get a key ID and a secret. The secret is shown only once.
+
+### 2. Store the key in the Keychain
+
+```sh
+security add-generic-password -U -s mymind-archive -a kid -w
+security add-generic-password -U -s mymind-archive -a secret -w
+```
+
+Each command asks for the value. Paste it in (it is not shown on screen).
+
+If you are working over SSH, unlock the keychain first.
+
+```sh
+security unlock-keychain ~/Library/Keychains/login.keychain-db
+```
+
+### 3. Write the settings (optional)
+
+```sh
+mkdir -p ~/.config/mymind-archive
+cp config.example.json ~/.config/mymind-archive/config.json
+```
+
+Set `mirror_dir` to `null` if you do not want a mirror. Without a settings file, the defaults apply.
+
+### 4. Dry run
+
+```sh
+./backup.py --probe
+```
+
+This writes nothing. It shows whether authentication works, how many items you have, and how many API credits a run costs.
+
+### 5. First run
+
+```sh
+./backup.py
+```
+
+Text and raw data arrive in a single request. Original files and screenshots are fetched one by one,
+so with many items the script may stop when your API credits run low. It picks up where it left off on the next run.
+
+### 6. Run it every day
+
+```sh
+./scripts/install-launchd.sh
+```
+
+It runs daily at 4:20. To change the time: `MYMIND_ARCHIVE_HOUR=6 MYMIND_ARCHIVE_MINUTE=0 ./scripts/install-launchd.sh`.
+To remove the job: `./scripts/uninstall-launchd.sh` (your data stays).
+
+If `mirror_dir` is a cloud storage folder (`~/Library/CloudStorage/...`), macOS may ask for permission the first time.
+After installing, run the job once with `launchctl kickstart gui/$(id -u)/local.mymind-archive` and check the screen for a permission dialog.
+
+## What gets saved
+
+```
+~/mymind-archive/
+  index.jsonl                 one line per item (title, URL, created, modified, deleted, file path)
+  deleted.md                  items deleted from mymind, most recent first
+  runs.jsonl                  run history
+  state.json                  bookkeeping used by the script
+  items/2026-11/
+    20261120_Title_xxxxxx.md              for reading: tags, spaces, summary, notes, content
+    20261120_Title_xxxxxx.screenshot.jpg  screenshot taken when the item was saved
+    20261120_Title_xxxxxx.pdf             the original file you uploaded
+  raw/
+    <ID>.json                 raw object as returned by the API
+    <ID>.embeddings.json      the object's vector embeddings from mymind
+```
+
+- File names are `date saved_title_end of ID`. They do not change if the title changes later
+- Each Markdown file starts with `status: active` or `status: deleted`
+- Markdown can be rebuilt from the raw data at any time: `./backup.py --rebuild`
+
+## Configuration
+
+`~/.config/mymind-archive/config.json`
+
+| Key | Default | Meaning |
+|---|---|---|
+| `data_dir` | `~/mymind-archive` | Where the data is kept |
+| `mirror_dir` | `null` | Mirror destination. Files there are never deleted, and files removed there are copied again on the next run |
+| `include_embeddings` | `true` | Also save vector embeddings |
+| `download_screenshots` | `true` | Save screenshots |
+| `download_blobs` | `true` | Save original files |
+| `try_direct_media_url` | `true` | Try the media URL directly before going through the API |
+| `sustained_reserve_ratio` | `0.3` | When the 30-day credit allowance drops below this share, leave remaining files for the next run |
+| `max_blob_mb` | `200` | Skip original files larger than this |
+| `mass_delete_guard` | `0.3` | If more than this share of items vanishes from the list at once, assume an API problem and do not mark them deleted |
+
+The environment variables `MYMIND_ARCHIVE_DIR`, `MYMIND_MIRROR_DIR` and `MYMIND_ARCHIVE_CONFIG_DIR` also work.
+
+## Good to know
+
+- **Deletions are detected once per run.** An item saved and deleted between two runs leaves no trace
+- **Deleting a lot at once.** If more than 30% of your items (and more than 20 items) disappear at once, they are not marked as deleted, to be safe.
+  If you really deleted them, run `./backup.py --accept-mass-delete` once
+- **The mirror is not a sync.** It is a one-way copy. The source of truth is `data_dir`
+- **Earlier versions are not kept.** Updated items are overwritten. If you need older versions, rely on the version history of wherever you mirror to
+- **API credits.** The mymind API gives each plan a credit allowance. To leave room for your other uses,
+  this script stops fetching files when the 30-day allowance drops below 30%
+
+### Not yet verified against the live API
+
+A few points could not be settled from the API documentation alone, so the script handles them as follows.
+`--probe` shows which case applies.
+
+- Whether the secret is base64-decoded before signing, and whether the `path` claim includes the query string:
+  the script tries all four combinations and remembers the one that works
+- Whether media URLs can be fetched without authentication:
+  the script tries the URL directly first, then falls back to the API
+- Credit cost per request: the script adds up the values from the response headers and logs them
+
+## Tests
+
+The tests run the whole flow against a mock API server: save, update, delete, restore, and stop-and-resume.
+
+```sh
+python3 -m unittest discover -s tests -v
+```
+
+## License and terms
+
+The code is released under the MIT License ([LICENSE](LICENSE)).
+
+The mymind API has its own terms (<https://access.mymind.com/api/terms>).
+The API is for personal, non-commercial use only. Follow those terms when you use this tool.
+
+---
+
+# 日本語
+
+[English](#mymind-archive) | **日本語**
+
 [mymind](https://mymind.com) に保存したものを、公式 API で毎日手元に写していくスクリプトです。
 mymind で消したものも、手元には残ります。
 
